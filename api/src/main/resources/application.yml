@@ -16,7 +16,6 @@ spring:
       #hikari:
       #maximum-pool-size: 40
       #idle-timeout: 60
-
   transaction:
     default-timeout: 60
 
@@ -35,6 +34,12 @@ spring:
     redis:
       host: 127.0.0.1
       port: 6379
+
+#  security:
+#    user:
+#      name: admin
+#      password: 1234
+#      roles: ADMIN
 
 logging.level:
   org.hibernate.SQL: DEBUG
