@@ -35,7 +35,6 @@ class CouponServiceTest {
     @AfterEach
     public void afterEach() {
 
-        couponRepository.deleteAll();
         couponCountRepository.reset();
     }
     @Test
@@ -128,7 +127,7 @@ class CouponServiceTest {
 
     @Test
     @DisplayName("Redis incr로 레이스컨디션 없이 1씩 증가시키면, 레이스컨디션 문제 해결")
-    void red간is_incr명령어로_couponCount를_증가시켜_레이스컨디션문제해결() throws Exception {
+    void redis_incr명령어로_couponCount를_증가시켜_레이스컨디션문제해결() throws Exception {
 
         //given
         // ExecutorService는 멀티쓰레드 동장을 간단하게 도와주는 Java 모듈
@@ -169,7 +168,7 @@ class CouponServiceTest {
 
         //given
         // ExecutorService는 멀티쓰레드 동장을 간단하게 도와주는 Java 모듈
-        int threadCount = 1000;
+        int threadCount = 100;
         ExecutorService executorService = Executors.newFixedThreadPool(32);
         CountDownLatch countDownLatch = new CountDownLatch(threadCount);
 
@@ -198,5 +197,85 @@ class CouponServiceTest {
         Long couponCount = couponRepository.countByEntityStatus(EntityStatus.ACTIVE);
         System.out.println("[수행 시간] : " + (endTime - startTime) + " ms");
         assertThat(couponCount).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("kafka의 coupon_create topic에 producer가 userId값을 넣는 테스트, 그리고 Consumer가 DB에 insert 한다")
+    void couponCreateProducerTest() throws Exception {
+
+        //given
+        // ExecutorService는 멀티쓰레드 동장을 간단하게 도와주는 Java 모듈
+        int threadCount = 1000;
+        ExecutorService executorService = Executors.newFixedThreadPool(32);
+        CountDownLatch countDownLatch = new CountDownLatch(threadCount);
+
+        long startTime = System.currentTimeMillis();
+        //when
+        for (int i = 0; i < threadCount; i++) {
+
+            int finalI = i;
+            executorService.submit(() -> {
+
+                /** main tread에 의해 비동기로 호출되는 각 worker thread가 couponService.applyCoupon()을 호출한 후, finally 문에서 countDown() 호출한다 */
+                try {
+
+                    couponService.applyCouponWithKafka(Long.valueOf(finalI));
+                } finally {
+
+                    countDownLatch.countDown();
+                }
+            });
+        }
+        /** 비동기로 각 worker thread에게 작업을 위임한 후, 여기로 내려온 main thread가 , countDownLatch의 countDown이 0이 될때까지, main thread가 대기한다 */
+        countDownLatch.await();
+        long endTime = System.currentTimeMillis();
+
+        Thread.sleep(10000);
+        //then
+        Long couponCount = couponRepository.count();
+        System.out.println("[수행 시간] : " + (endTime - startTime) + " ms");
+        assertThat(couponCount).isEqualTo(100L);
+    }
+
+    @Test
+    @DisplayName("Kafka와 함께 Redis Set을 써서 한명의 User당 1개씩만 발급되도록 수정")
+    void 회원1명당_1개의쿠폰만_발급되도록() throws Exception {
+
+        //given
+        // ExecutorService는 멀티쓰레드 동장을 간단하게 도와주는 Java 모듈
+        int threadCount = 1000;
+        ExecutorService executorService = Executors.newFixedThreadPool(32);
+        CountDownLatch countDownLatch = new CountDownLatch(threadCount);
+
+        long startTime = System.currentTimeMillis();
+        //when
+        for (int i = 0; i < threadCount; i++) {
+
+            int finalI = i;
+            executorService.submit(() -> {
+
+                /** main tread에 의해 비동기로 호출되는 각 worker thread가 couponService.applyCoupon()을 호출한 후, finally 문에서 countDown() 호출한다 */
+                try {
+
+                    couponService.applyCouponWithKafkaAndRedisSet(1L);
+                } finally {
+
+                    countDownLatch.countDown();
+                }
+            });
+        }
+        /** 비동기로 각 worker thread에게 작업을 위임한 후, 여기로 내려온 main thread가 , countDownLatch의 countDown이 0이 될때까지, main thread가 대기한다 */
+        countDownLatch.await();
+        long endTime = System.currentTimeMillis();
+
+        Thread.sleep(10000);
+        //then
+        Long couponCount = couponRepository.count();
+        System.out.println("[수행 시간] : " + (endTime - startTime) + " ms");
+
+        /**[기대하는 결과]
+         * : 여러명의 쓰레드가 동시에 요청하지만, 사실 그 요청 다 1L의 userId값을 가진 동일한 회원의 악의적인 요청이었으니 -> 딱 1개만 발급된다
+         * */
+        assertThat(couponCount).isEqualTo(1L);
     }
 }

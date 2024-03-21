@@ -1,9 +1,11 @@
 package com.example.api.domain.coupon.service;
 
 import com.example.api.domain.coupon.Coupon;
+import com.example.api.domain.coupon.repository.AppliedUserRepository;
 import com.example.api.domain.coupon.repository.CouponCountRepository;
 import com.example.api.domain.coupon.repository.CouponRepository;
 import com.example.api.global.enums.EntityStatus;
+import com.example.api.global.kafka.producer.CouponCreateProducer;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -15,8 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class CouponService {
 
     private final CouponRepository couponRepository;
-
     private final CouponCountRepository couponCountRepository;
+    private final CouponCreateProducer couponCreateProducer;
+    private final AppliedUserRepository appliedUserRepository;
 
     private final Long MAXIMUM_COUPON_COUNT = 100L;
 
@@ -113,5 +116,54 @@ public class CouponService {
         //2_2. 100개 미만이면 발급
         Coupon coupon = Coupon.create(userId);
         couponRepository.save(coupon);
+    }
+
+    @Transactional
+    public void applyCouponWithKafka(Long userId) {
+
+        /**
+         * redis의 incr로 인해 -> 싱글쓰레드로 레이스컨디션 없이 증가시킨 후 -> 그 증가된 값을 확인하고 save에 들어가니 -> 문제 해결
+         */
+        //1. redis incr로 레이스컨디션 문제 없이 먼저 1 증가 후 -> 증가된 값으로 비교
+        Long incrementCouponCount = couponCountRepository.increment();
+
+        //2_1. 100개 이상이면 발급 x
+        if (incrementCouponCount >= MAXIMUM_COUPON_COUNT + 1) {
+
+            return;
+        }
+
+        System.out.println("*******************");
+        System.out.println("Thread Name : " + Thread.currentThread().getName() + " / 읽어온 coupon 개수 : " + incrementCouponCount);
+        System.out.println("*******************");
+        //2_2. 100개 미만이면 발급
+        couponCreateProducer.create(userId);
+    }
+
+    @Transactional
+    public void applyCouponWithKafkaAndRedisSet(Long userId) {
+
+        /**
+         * 이미 쿠폰을 발급받은 회원이라면 out -> 즉 User별로 1인당 1개만 발급됨
+         * */
+        if (appliedUserRepository.add(userId) != 1L) {
+
+            return;
+        }
+
+        //1. redis incr로 레이스컨디션 문제 없이 먼저 1 증가 후 -> 증가된 값으로 비교
+        Long incrementCouponCount = couponCountRepository.increment();
+
+        //2_1. 100개 이상이면 발급 x
+        if (incrementCouponCount >= MAXIMUM_COUPON_COUNT + 1) {
+
+            return;
+        }
+
+        System.out.println("*******************");
+        System.out.println("Thread Name : " + Thread.currentThread().getName() + " / 읽어온 coupon 개수 : " + incrementCouponCount);
+        System.out.println("*******************");
+        //2_2. 100개 미만이면 발급
+        couponCreateProducer.create(userId);
     }
 }
